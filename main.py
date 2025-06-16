@@ -8,6 +8,8 @@ import ctypes
 import numpy as np
 import math
 
+from logging_config import get_logger
+
 # Importar mòdul chatbot
 import sys
 
@@ -17,6 +19,8 @@ from chatbot.chatbotV2 import OpenRouterAgent
 API_KEY = os.environ.get('API_KEY')  # Make sure this is set in your environment
 openrouter_agent = OpenRouterAgent(api_key=API_KEY)
 #local_agent = Transmission
+
+logger = get_logger(__name__)
 
 app = FastAPI()
 
@@ -32,6 +36,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/")
 async def serve_index():
     index_path = "static/index.html"
+    logger.info("Serving index page")
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"error": "index.html no encontrado"}
@@ -65,7 +70,17 @@ async def exponents(
     """  
     Calcula l'exponent `Pe`, 'E' i `RHO`.
     """
-    # Resultat + Retron
+    logger.info(
+        "Calculating exponents with M=%s typeM=%s SNR=%s R=%s N=%s n=%s th=%s",
+        M,
+        typeM,
+        SNR,
+        R,
+        N,
+        n,
+        th,
+    )
+    # Resultat + Retorn
     # Allocate output buffer
     result = (ctypes.c_float * 3)()
     lib.exponents(
@@ -79,6 +94,10 @@ async def exponents(
         result  # Pass the buffer
     )
     values = list(result)  # Convert to Python list
+
+    logger.info(
+        "Exponents result Pe=%s exponent=%s rho=%s", values[0], values[1], values[2]
+    )
 
     return {
         "Probabilidad de error": values[0],
@@ -107,6 +126,7 @@ class FunctionPlotRequest(BaseModel):
 @app.post("/plot_function")
 async def generate_plot_from_function(plot_data: FunctionPlotRequest):
     try:
+        logger.info("Generating function plot", extra={"params": plot_data.model_dump()})
         # Generar valores x asegurando enteros para M y N
         if plot_data.x in ["M", "N", "n"]:
             raw = np.linspace(plot_data.rang_x[0], plot_data.rang_x[1], plot_data.points)
@@ -148,6 +168,7 @@ async def generate_plot_from_function(plot_data: FunctionPlotRequest):
             }
             y_vals.append(y_map[plot_data.y])
 
+        logger.info("Function plot generated")
         return {
             "x": x_vals.tolist(),
             "y": y_vals
@@ -177,6 +198,7 @@ class ContourPlotRequest(BaseModel):
 @app.post("/plot_contour")
 async def generate_contour_plot(plot_data: ContourPlotRequest):
     try:
+        logger.info("Generating contour plot", extra={"params": plot_data.model_dump()})
         # Generar valores de x1
         if plot_data.x1 in ["M", "N", "n"]:
             raw_x1 = np.linspace(plot_data.rang_x1[0], plot_data.rang_x1[1], plot_data.points1)
@@ -226,7 +248,7 @@ async def generate_contour_plot(plot_data: ContourPlotRequest):
                 }
                 row.append(y_map[plot_data.y])
             z_matrix.append(row)
-
+        logger.info("Contour plot generated")
         return {
             "x1": x1_vals.tolist(),
             "x2": x2_vals.tolist(),
@@ -245,6 +267,7 @@ class ChatbotRequest(BaseModel):
 @app.post("/chatbot")
 async def chatbot_with_bot(request: ChatbotRequest):
     try:
+        logger.info("Chatbot request", extra={"message": request.message, "model": request.model_choice})
 
         # Choose the agent based on the user's selection
         # TODO CHANGE THE FIRST OPENROUTER_AGENT TO THE LOCAL_AGENT
@@ -252,6 +275,10 @@ async def chatbot_with_bot(request: ChatbotRequest):
 
         # Use the selected agent to process the request
         response_text = "".join(agent_to_use.generate_response_stream(request.message))
+        logger.info("Chatbot response generated")
+        if not response_text or "[service" in response_text.lower():
+            logger.warning("Using fallback response")
+            return {"response": "The assistant is currently unavailable. Please try again later."}
 
         function_calls = agent_to_use.parse_function_calls(response_text)
 
@@ -277,5 +304,6 @@ async def chatbot_with_bot(request: ChatbotRequest):
             # If no function call, just return the LLM's text
             return {"response": response_text}
     except Exception as e:
+        logger.exception("Chatbot error: %s", e)
         raise HTTPException(status_code=500, detail=f"Error in chatbot: {str(e)}")
 

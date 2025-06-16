@@ -513,26 +513,33 @@ class OpenRouterAgent:
             "temperature": 0.1,
             "top_p": 0.9
         }
-        with requests.post(url, headers=headers, json=payload, stream=True) as resp:
-            buffer = ""
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                s = line.decode('utf-8').strip()
-                if not s or not s.startswith('data:'):
-                    continue
-                s = s[5:].strip()
-                if s == '[DONE]':
-                    break
-                try:
-                    data = json.loads(s)
-                    content = data.get('choices', [{}])[0].get('delta', {}).get('content', '')
-                    buffer += content
-                    if content:
-                        yield content
-                except Exception as e:
-                    if s:
-                        yield f"[stream error: {str(e)}]"
+        try:
+            with requests.post(url, headers=headers, json=payload, stream=True, timeout=15) as resp:
+                if resp.status_code != 200:
+                    logging.error("OpenRouter request failed: %s %s", resp.status_code, resp.text)
+                    yield "[service unavailable]"
+                    return
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    s = line.decode('utf-8').strip()
+                    if not s or not s.startswith('data:'):
+                        continue
+                    s = s[5:].strip()
+                    if s == '[DONE]':
+                        break
+                    try:
+                        data = json.loads(s)
+                        content = data.get('choices', [{}])[0].get('delta', {}).get('content', '')
+                        if content:
+                            yield content
+                    except Exception as e:
+                        if s:
+                            logging.exception("Stream parse error: %s", e)
+                            yield f"[stream error: {str(e)}]"
+        except requests.RequestException as e:
+            logging.exception("OpenRouter connection error: %s", e)
+            yield "[service error]"
 
     def parse_function_calls(self, response: str) -> List[FunctionCall]:
         function_calls = []
